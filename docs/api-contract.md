@@ -4,7 +4,7 @@ Ce document décrit **l'API réelle** (`zemiconnect-api`), alignée sur la base 
 
 **Règle générale : les noms de champs et les valeurs exposés par l'API sont ceux de la base, sans traduction** (`zemi_number`, `identification_number`, `compliance_status`, `manufacture_year`, `status: 'active'`, `type: 'driving_license'`…).
 
-Légende : ✅ implémenté (lot 1) · 📋 à venir (lots suivants, contrat cible).
+Légende : ✅ implémenté (lot 1 : authentification ; lot 2 : conducteurs, motos, affectations, documents, conformité) · 📋 à venir (lots suivants, contrat cible).
 
 ## Changements par rapport au contrat du mode fictif
 
@@ -51,16 +51,18 @@ Légende : ✅ implémenté (lot 1) · 📋 à venir (lots suivants, contrat cib
   { "status": "error", "message": "…", "errors": { "champ": ["message"] }, "code": "…" }
   ```
 
-  `errors` est présent sur un 422 ; `code` sur certains 403 (`account_disabled`, `password_change_required`).
+  `errors` est présent sur un 422 de validation ; `code` sur certains 403 (`account_disabled`, `password_change_required`) et sur **toute règle métier refusée (422)**.
+
+  Codes métier (422) : `invalid_transition` (transition de statut interdite, `errors.status`), `activation_incomplete` (`errors.activation`), `driver_archived`, `motorcycle_archived`, `motorcycle_assigned` (archivage d'une moto affectée), `motorcycle_unavailable` (`errors.motorcycle_id`, moto affectée à un autre conducteur), `motorcycle_already_assigned`, `assignment_change_invalid` (`errors.start_reason` / `errors.started_at`).
 
   | Code HTTP | Usage | Traitement côté front |
   | --- | --- | --- |
   | 401 | Session absente ou expirée | Retour à `/connexion?motif=session&retour=<page>` (jamais depuis une page publique) |
   | 403 | Droit insuffisant ; `code: "account_disabled"` = compte désactivé ou archivé ; `code: "password_change_required"` = mot de passe provisoire | Accès refusé ; `account_disabled` : déconnexion, `/connexion?motif=desactive` ; `password_change_required` : `/changer-mot-de-passe` |
   | 404 | Ressource introuvable | État vide ou PU3 |
-  | 409 | Transition impossible | Bandeau dans la modale |
+  | 409 | Non utilisé (lot 2) : les transitions impossibles répondent 422 avec un `code` | — |
   | 419 | Jeton CSRF expiré | Nouveau cookie, requête rejouée une fois |
-  | 422 | Validation (`errors` par champ) | Message sous chaque champ |
+  | 422 | Validation (`errors` par champ) ; règle métier refusée (`code`) | Message sous chaque champ ; bandeau dans la modale pour un `code` |
   | 429 | Trop d'essais, en-tête `Retry-After` (secondes) | « Réessayez dans X minutes » |
 
 - **Dates** : `AAAA-MM-JJ` pour les dates seules (`birth_date`, `issued_at`, `expires_at`, `started_at`, `ended_at`) ; ISO 8601 en UTC (`2026-11-04T08:12:00Z`) pour les horodatages. Une date d'expiration absente vaut `null`.
@@ -157,7 +159,7 @@ AgentDriverView { zemi_number, first_name, last_name, photo_url|null, phone, add
 Codes d'action du journal (`LogEntry.action`) :
 
 - conducteurs : `driver.created|updated|photo_updated|validated|suspended|reactivated|archived` ;
-- documents, affectations, QR : `document.added|renewed`, `assignment.changed`, `qr.generated|regenerated|revoked` ;
+- documents, affectations, QR : `document.added|renewed|file_viewed`, `assignment.changed|closed`, `qr.generated|regenerated|revoked` ;
 - motos : `motorcycle.created|updated|archived` ;
 - agents : `agent.created|updated|deactivated|reactivated|archived|reset_link_sent` ;
 - gestionnaires et paramètres : `manager.created|updated|deactivated|reactivated|archived|reset_link_sent`, `settings.updated` ;
@@ -212,30 +214,40 @@ Chaque appel enregistre la consultation (`professional_consultations`, canal `qr
 
 `TodoItem { driver_id, driver_name, document_type|null, date|null, missing?: ('photo'|'id_card'|'driving_license'|'motorcycle')[] }`.
 
-### Conducteurs 📋
+### Conducteurs ✅
+
+L'agent n'a accès à aucune de ces routes (403) ; l'administrateur les lit toutes et reçoit 403 sur toute écriture. Les autorisations sont vérifiées **avant** la validation du corps.
 
 | Méthode | URL | Permission | Corps | Réponse | Erreurs |
 | --- | --- | --- | --- | --- | --- |
-| GET | `/drivers?search&status&compliance_status&registered_from&registered_to&page&per_page` | `drivers.view` | — | `Paginated<Driver>` | — |
+| GET | `/drivers?search&status&compliance_status&registered_from&registered_to&sort&page&per_page` | `drivers.view` | — | `Paginated<Driver>` (sans `documents` ; `motorcycle` sans assurance) | 422 filtre invalide |
 | GET | `/drivers/duplicates?phone&identification_number&first_name&last_name&exclude` | `drivers.manage` | — | `[{ id, name, zemi_number\|null, status, reasons: ('phone'\|'identifier'\|'name')[] }]` | — |
-| POST | `/drivers` | `drivers.manage` | multipart : `last_name, first_name, birth_date, phone, address, identification_number`, `registration_form?` (fichier, devient un document `registration_form`) | `Driver` en attente | 422 |
-| GET | `/drivers/{id}` | `drivers.view` | — | `Driver` | 404 |
-| POST | `/drivers/{id}?_method=PUT` | `drivers.manage` | multipart, mêmes champs | `Driver` | 409 archivé ; 422 |
-| POST | `/drivers/{id}/photo` | `drivers.manage` | multipart `photo` | `Driver` | 409 ; 422 |
-| POST | `/drivers/{id}/assignment` | `assignments.manage` | `{ motorcycle_id, started_at?, start_reason? }` | `Driver` ; l'affectation en cours est clôturée | 422 `motorcycle_id` (moto déjà affectée ou archivée) |
+| POST | `/drivers` | `drivers.manage` | multipart : `last_name, first_name, birth_date, phone, address` (obligatoires), `identification_number?`, `registration_form?` (fichier, devient un document `registration_form`) | **201** `Driver` en attente | 422 |
+| GET | `/drivers/{id}` | `drivers.view` | — | `Driver` (documents actuels, moto actuelle et son assurance) | 404 |
+| PUT | `/drivers/{id}` (ou POST `?_method=PUT` en multipart) | `drivers.manage` | mêmes champs, chacun facultatif ; `registration_form?` | `Driver` | 422 `driver_archived` ; 422 |
+| POST | `/drivers/{id}/photo` | `drivers.manage` | multipart `photo` (JPEG ou PNG, contenu réel, 5 Mo, ≥ 200 × 200 px) | `Driver` (photo réencodée en JPEG, l'ancienne conservée) | 422 `driver_archived` ; 422 |
+| GET | `/drivers/{id}/photo?expires&signature` | URL signée (`photo_url`, 5 min) | — | image JPEG | 403 signature absente ou expirée |
+| POST | `/drivers/{id}/assignment` | `assignments.manage` | `{ motorcycle_id, started_at?, start_reason? }` (`started_at` ≤ aujourd'hui ; **date et motif obligatoires pour un changement**) | `Driver` ; l'affectation en cours est clôturée à `started_at` | 422 `motorcycle_unavailable` sur `motorcycle_id` (« Cette moto est déjà affectée à un autre conducteur ») ; 422 `motorcycle_archived` ; 422 `assignment_change_invalid` ; 422 `driver_archived` |
 | GET | `/drivers/{id}/assignments` | `motorcycles.view` | — | `Assignment[]` (plus récente d'abord) | — |
-| POST | `/drivers/{id}/validate` | `drivers.manage` | — | `Driver` (`zemi_number` attribué, QR généré, statut `actif`) | 422 `errors.activation: ('photo'\|'id_card'\|'driving_license'\|'motorcycle')[]` ; 409 si pas en attente |
-| PATCH | `/drivers/{id}/status` | `drivers.manage` | `{ status: 'suspendu'\|'actif', reason }` | `Driver` | 409 ; 422 `reason` |
-| POST | `/drivers/{id}/archive` | `drivers.manage` | `{ reason }` | `Driver` (QR révoqué, affectation clôturée) | 409 ; 422 |
-| GET | `/drivers/{id}/history` | `drivers.view` | — | `LogEntry[]` | — |
+| POST | `/drivers/{id}/validate` | `drivers.manage` | — | `Driver` (`zemi_number` attribué, QR actif créé, statut `actif`, `validated_by`) | 422 `activation_incomplete` `{ errors.activation: ('photo'\|'id_card'\|'driving_license'\|'motorcycle')[] }` ; 422 `invalid_transition` si pas en attente |
+| PATCH | `/drivers/{id}/status` | `drivers.manage` | `{ status: 'suspendu'\|'actif', reason }` (motif obligatoire pour suspendre) | `Driver` | 422 `invalid_transition` ; 422 `reason` |
+| POST | `/drivers/{id}/archive` | `drivers.manage` | `{ reason }` | `Driver` (QR révoqué, affectation clôturée, même transaction) | 422 `invalid_transition` ; 422 `reason` |
+| GET | `/drivers/{id}/history` | `drivers.view` | — | `LogEntry[]` (audit `kind: audit` + consultations `kind: consultation`, plus récent d'abord) | — |
 
-### Documents 📋
+Transitions (GE4) : En attente → Actif (validation) ; Actif → Suspendu ; Suspendu → Actif ; Actif ou Suspendu → Archivé. Un dossier archivé n'accepte plus aucune transition ni modification. **Écart avec GE4** : l'archivage d'un dossier En attente est refusé, car le CHECK C13 de la base (« En attente ⇔ sans numéro ») l'interdit.
+
+Recherche `search` : nom, prénom, « prénom nom », numéro ZemiConnect (saisie normalisée), téléphone (chiffres, 4 au moins), identifiant, immatriculation de la moto actuelle. Tri `sort` : `-created_at` (défaut) ou `created_at`. `per_page` : 100 au plus.
+
+### Documents ✅
 
 | Méthode | URL | Permission | Corps | Réponse | Erreurs |
 | --- | --- | --- | --- | --- | --- |
-| POST | `/drivers/{id}/documents`, `/motorcycles/{id}/documents` | `documents.manage` | multipart : `type, number, category?, issuer?, issued_at, expires_at` (vide = sans expiration ; **obligatoire pour `insurance`**), `file` | `Document` ; l'ancien document actuel du même type passe à `is_current: false` | 422 (`type` incohérent avec le propriétaire, `expires_at`, fichier) |
-| GET | `/drivers/{id}/documents/history`, `/motorcycles/{id}/documents/history` | `drivers.view` / `motorcycles.view` | — | `Document[]` avec `is_current: false` | — |
-| GET | `/documents/{id}/file` | `documents.view_file` | — | `{ url, expires_at }` (URL temporaire signée) | 404 aucun fichier ; 403 agent |
+| POST | `/drivers/{id}/documents` (`id_card`, `driving_license`, `taxi_license`, `registration_form`), `/motorcycles/{id}/documents` (`insurance`) | `documents.manage` | multipart : `type, number?, category?, issuer?, issued_at?, expires_at?` (vide = sans expiration ; **obligatoire pour `insurance`** ; postérieure à `issued_at`), `file?` (obligatoire pour `registration_form`) | **201** `Document` ; l'ancien document actuel du même type passe à `is_current: false` | 422 `type` (« L'assurance se rattache à la moto… »), `expires_at`, `file` ; 422 `driver_archived` / `motorcycle_archived` |
+| GET | `/drivers/{id}/documents/history?type=`, `/motorcycles/{id}/documents/history` | `drivers.view` / `motorcycles.view` | — | `Document[]` remplacés (`is_current: false`), par type puis plus récent d'abord | — |
+| GET | `/documents/{id}/file` | `documents.view_file` | — | `{ url, expires_at }` : URL signée valable 5 minutes ; l'accès est journalisé (`document.file_viewed`) | 404 aucun fichier ; 403 agent |
+| GET | `/documents/{id}/download?expires&signature` | URL signée | — | le fichier en flux (`inline`) | 403 signature absente ou expirée |
+
+Fichiers : PDF, JPG ou PNG, 5 Mo au plus ; le **contenu réel** (finfo) et l'extension doivent concorder. Stockage sur disque privé, sous un nom aléatoire ; rien n'est supprimé au renouvellement.
 
 ### QR et badge 📋
 
@@ -247,16 +259,16 @@ Chaque appel enregistre la consultation (`professional_consultations`, canal `qr
 | GET | `/drivers/{id}/qr-codes/active.png`, `.svg` | `qr.manage` | — | image | 404 |
 | GET | `/drivers/{id}/badge.pdf` | `qr.manage` | — | PDF du badge | 404 |
 
-### Motos 📋
+### Motos ✅
 
 | Méthode | URL | Permission | Corps | Réponse | Erreurs |
 | --- | --- | --- | --- | --- | --- |
-| GET | `/motorcycles?search&unassigned&page&per_page` | `motorcycles.view` | — | `Paginated<Motorcycle>` | — |
-| POST | `/motorcycles` | `motorcycles.manage` | `{ plate_number, brand\|null, model\|null, color\|null, manufacture_year\|null, chassis_number\|null }` | `Motorcycle` | 422 `plate_number` ou `chassis_number` déjà existants |
+| GET | `/motorcycles?search&unassigned&status&page&per_page` | `motorcycles.view` | — | `Paginated<Motorcycle>` (`documents` = assurance actuelle ; `unassigned=true` : sans conducteur et non archivées) | — |
+| POST | `/motorcycles` | `motorcycles.manage` | `{ plate_number, brand\|null, model\|null, color\|null, manufacture_year\|null, chassis_number\|null }` | **201** `Motorcycle` (immatriculation normalisée : `bb 4521-rb` → `BB4521RB`) | 422 `plate_number` ou `chassis_number` déjà existants |
 | GET | `/motorcycles/{id}` | `motorcycles.view` | — | `Motorcycle` | 404 |
-| PUT | `/motorcycles/{id}` | `motorcycles.manage` | comme la création | `Motorcycle` | 409 archivée ; 422 |
-| POST | `/motorcycles/{id}/archive` | `motorcycles.manage` | `{ archive_reason }` | `Motorcycle` | **409 tant que la moto est affectée** ; 422 |
-| GET | `/motorcycles/{id}/assignments` | `motorcycles.view` | — | `Assignment[]` | — |
+| PUT | `/motorcycles/{id}` | `motorcycles.manage` | comme la création, champs facultatifs | `Motorcycle` | 422 `motorcycle_archived` ; 422 |
+| POST | `/motorcycles/{id}/archive` | `motorcycles.manage` | `{ archive_reason }` | `Motorcycle` | **422 `motorcycle_assigned` tant que la moto est affectée** ; 422 `motorcycle_archived` ; 422 `archive_reason` |
+| GET | `/motorcycles/{id}/assignments` | `motorcycles.view` | — | `Assignment[]` (plus récente d'abord) | — |
 
 ### Agents 📋
 
