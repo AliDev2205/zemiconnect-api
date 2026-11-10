@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\DocumentType;
+use App\Enums\DocumentValidity;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -29,7 +30,26 @@ class Document extends Model
         'updated_by',
     ];
 
-    protected $hidden = ['file_path', 'current_driver_id', 'current_motorcycle_id'];
+    /** Le chemin du fichier n'est jamais exposé (accès par URL signée). */
+    protected $hidden = ['file_path', 'current_driver_id', 'current_motorcycle_id', 'created_by', 'updated_by', 'updated_at'];
+
+    /** Champs dérivés exposés par l'API : validité calculée et présence d'un fichier. */
+    protected $appends = ['validity', 'has_file'];
+
+    public function getValidityAttribute(): string
+    {
+        return DocumentValidity::fromExpiry($this->expires_at)->value;
+    }
+
+    public function getHasFileAttribute(): bool
+    {
+        return $this->file_path !== null;
+    }
+
+    public function owner(): Driver|Motorcycle|null
+    {
+        return $this->driver_id !== null ? $this->driver : $this->motorcycle;
+    }
 
     protected function casts(): array
     {

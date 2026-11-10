@@ -32,6 +32,28 @@ class Motorcycle extends Model
         'created_by',
     ];
 
+    protected $hidden = ['created_by', 'updated_at', 'currentAssignment'];
+
+    /** Conducteur actuel, dérivé de l'affectation ouverte (relation currentAssignment.driver). */
+    protected $appends = ['driver_id', 'driver_name'];
+
+    public function getDriverIdAttribute(): ?int
+    {
+        return $this->currentAssignment?->driver_id;
+    }
+
+    public function getDriverNameAttribute(): ?string
+    {
+        $driver = $this->currentAssignment?->driver;
+
+        return $driver ? trim("{$driver->first_name} {$driver->last_name}") : null;
+    }
+
+    public function isArchived(): bool
+    {
+        return $this->status === MotorcycleStatus::Archived;
+    }
+
     protected function casts(): array
     {
         return [

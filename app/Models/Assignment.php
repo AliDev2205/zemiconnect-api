@@ -23,6 +23,21 @@ class Assignment extends Model
         'ended_by',
     ];
 
+    protected $hidden = ['open_driver_id', 'open_motorcycle_id', 'created_by', 'ended_by', 'updated_at', 'driver', 'motorcycle'];
+
+    /** Libellés dérivés pour l'historique (relations driver et motorcycle). */
+    protected $appends = ['driver_name', 'plate_number'];
+
+    public function getDriverNameAttribute(): ?string
+    {
+        return $this->driver ? trim("{$this->driver->first_name} {$this->driver->last_name}") : null;
+    }
+
+    public function getPlateNumberAttribute(): ?string
+    {
+        return $this->motorcycle?->plate_number;
+    }
+
     protected function casts(): array
     {
         return [

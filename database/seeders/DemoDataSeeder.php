@@ -2,7 +2,6 @@
 
 namespace Database\Seeders;
 
-use App\Enums\ComplianceStatus;
 use App\Enums\DocumentType;
 use App\Enums\DriverStatus;
 use App\Enums\QrStatus;
@@ -16,6 +15,7 @@ use App\Models\ProfessionalConsultation;
 use App\Models\QrCode;
 use App\Models\Setting;
 use App\Models\User;
+use App\Services\ComplianceService;
 use App\Services\ZemiNumberGenerator;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Seeder;
@@ -246,10 +246,7 @@ class DemoDataSeeder extends Seeder
                 ]);
             }
 
-            $driver->forceFill([
-                'compliance_status' => $this->compliance($row['docs'], $moto),
-                'compliance_checked_at' => now(),
-            ])->save();
+            app(ComplianceService::class)->recalculate($driver);
 
             $drivers[$key]['model'] = $driver;
         }
@@ -319,38 +316,6 @@ class DemoDataSeeder extends Seeder
             'created_by' => $this->users['gest']->id,
             'created_at' => $this->at(240),
         ]);
-    }
-
-    /**
-     * Conformité (RG06), calculée ici pour la démonstration seulement : le
-     * ComplianceService arrive dans un lot suivant. Permis, droit de taxi et
-     * assurance de la moto actuelle ; sans date d'expiration = valide (B3).
-     *
-     * @param  array<string, int|null>  $docs
-     */
-    private function compliance(array $docs, ?Motorcycle $moto): ComplianceStatus
-    {
-        $warning = (int) config('zemiconnect.compliance.expiry_warning_days');
-        $insurance = $moto?->currentInsurance()->first();
-        $insuranceDays = $insurance === null ? false : (int) $this->today->diffInDays($insurance->expires_at, false);
-
-        $checked = [
-            array_key_exists('driving_license', $docs) ? $docs['driving_license'] : false,
-            array_key_exists('taxi_license', $docs) ? $docs['taxi_license'] : false,
-            $insuranceDays,
-        ];
-
-        $status = ComplianceStatus::Conforme;
-        foreach ($checked as $days) {
-            if ($days === false || ($days !== null && $days < 0)) {
-                return ComplianceStatus::NonConforme;
-            }
-            if ($days !== null && $days <= $warning) {
-                $status = ComplianceStatus::ExpireBientot;
-            }
-        }
-
-        return $status;
     }
 
     /**

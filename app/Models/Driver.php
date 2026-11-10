@@ -52,6 +52,16 @@ class Driver extends Model
         ];
     }
 
+    public function isArchived(): bool
+    {
+        return $this->status === DriverStatus::Archive;
+    }
+
+    public function fullName(): string
+    {
+        return trim("{$this->first_name} {$this->last_name}");
+    }
+
     public function documents(): HasMany
     {
         return $this->hasMany(Document::class);
