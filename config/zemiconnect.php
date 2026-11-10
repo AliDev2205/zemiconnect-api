@@ -24,10 +24,30 @@ return [
         'max_attempts' => 10,
     ],
 
+    // Fuseau métier : « aujourd'hui » pour les expirations (dates stockées en UTC, affichées à l'heure du Bénin).
+    'timezone' => env('ZEMICONNECT_TIMEZONE', 'Africa/Porto-Novo'),
+
     // Conformité : « Expire bientôt » si l'expiration tombe dans ce délai (RG06, K2).
     'compliance' => [
         'expiry_warning_days' => 30,
     ],
+
+    // Fichiers privés (disque local = storage/app/private).
+    'files' => [
+        'disk' => 'local',
+        'max_kilobytes' => 5 * 1024,
+        // Durée de validité des URL signées (fichiers de documents, photos), en minutes.
+        'signed_url_minutes' => 5,
+    ],
+
+    // Jeton du QR : 16 caractères base62 (cahier §12, proposition technique).
+    'qr' => [
+        'token_length' => 16,
+    ],
+
+    // Vérification des mots de passe compromis (§17) : délai maximal d'attente du service, en secondes.
+    // Si le service ne répond pas, le mot de passe n'est pas bloqué.
+    'uncompromised_timeout' => 3,
 
     'rate_limits' => [
         // Blocage temporaire de la connexion (A4) : par email + IP.

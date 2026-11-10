@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\Exceptions\ThrottleRequestsException;
 use Illuminate\Http\Request;
 use Illuminate\Session\TokenMismatchException;
@@ -16,6 +17,7 @@ use Illuminate\Validation\ValidationException;
 use Spatie\Permission\Exceptions\UnauthorizedException;
 use Spatie\Permission\Middleware\PermissionMiddleware;
 use Spatie\Permission\Middleware\RoleMiddleware;
+use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
@@ -48,9 +50,11 @@ return Application::configure(basePath: dirname(__DIR__))
             }
 
             return match (true) {
+                // Réponse déjà construite (ex. 403 account_disabled) : renvoyée telle quelle, debug ou non.
+                $e instanceof HttpResponseException => $e->getResponse(),
                 $e instanceof ValidationException => ApiResponse::error($e->getMessage(), 422, $e->errors()),
                 $e instanceof AuthenticationException => ApiResponse::error('Non authentifié.', 401),
-                $e instanceof AuthorizationException, $e instanceof UnauthorizedException => ApiResponse::error('Accès refusé.', 403),
+                $e instanceof AuthorizationException, $e instanceof UnauthorizedException, $e instanceof AccessDeniedHttpException => ApiResponse::error('Accès refusé.', 403),
                 $e instanceof ModelNotFoundException, $e instanceof NotFoundHttpException => ApiResponse::error('Ressource introuvable.', 404),
                 $e instanceof ThrottleRequestsException => ApiResponse::error(
                     $e->getMessage() !== '' && $e->getMessage() !== 'Too Many Attempts.' ? $e->getMessage() : 'Trop de tentatives. Réessayez plus tard.',
